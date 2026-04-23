@@ -6,8 +6,6 @@ import tempfile
 from openai import OpenAI
 import gspread
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 from datetime import datetime
 
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
@@ -21,23 +19,15 @@ No text, no people, no faces. Pure minimalism.
 Black, white, and one accent color (gold or deep blue).
 Premium, editorial, thoughtful aesthetic."""
 
+IMGUR_CLIENT_ID = "546c25a59c58ad7"
+
 
 def get_sheet():
     creds_data = json.loads(GOOGLE_CREDENTIALS)
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-
-
-def get_drive_service():
-    creds_data = json.loads(GOOGLE_CREDENTIALS)
-    scopes = ["https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
-    return build("drive", "v3", credentials=creds)
 
 
 def generate_image(text, client):
@@ -57,33 +47,21 @@ def generate_image(text, client):
     return response.data[0].url
 
 
-def upload_to_drive(image_url, filename, drive_service):
+def upload_image(image_url):
     img_data = requests.get(image_url, timeout=30).content
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        f.write(img_data)
-        tmp_path = f.name
-
-    file_metadata = {"name": filename}
-    media = MediaFileUpload(tmp_path, mimetype="image/png")
-    uploaded = drive_service.files().create(
-        body=file_metadata, media_body=media, fields="id"
-    ).execute()
-
-    file_id = uploaded.get("id")
-    drive_service.permissions().create(
-        fileId=file_id,
-        body={"type": "anyone", "role": "reader"},
-    ).execute()
-
-    os.unlink(tmp_path)
-    return f"https://drive.google.com/uc?id={file_id}"
+    response = requests.post(
+        "https://api.imgur.com/3/image",
+        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
+        data={"image": img_data, "type": "file"},
+        timeout=30,
+    )
+    return response.json()["data"]["link"]
 
 
 def run():
     print("Проверяю таблицу...")
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
     sheet = get_sheet()
-    drive_service = get_drive_service()
 
     rows = sheet.get_all_values()
     if len(rows) <= 1:
@@ -102,11 +80,10 @@ def run():
         if status == "pending" and not image_url and text:
             print(f"Строка {i}: генерирую картинку...")
             try:
-                url = generate_image(text, openai_client)
-                filename = f"post_{row[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
-                drive_url = upload_to_drive(url, filename, drive_service)
-                sheet.update_cell(i, 3, drive_url)
-                print(f"  ✓ Картинка добавлена: {drive_url}")
+                dalle_url = generate_image(text, openai_client)
+                final_url = upload_image(dalle_url)
+                sheet.update_cell(i, 3, final_url)
+                print(f"  ✓ Картинка добавлена: {final_url}")
                 updated += 1
                 time.sleep(3)
             except Exception as e:
