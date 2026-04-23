@@ -1,8 +1,8 @@
 import os
 import json
 import time
+import base64
 import requests
-import tempfile
 from openai import OpenAI
 import gspread
 from google.oauth2.service_account import Credentials
@@ -12,14 +12,14 @@ SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 SHEET_NAME = "Posts"
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_REPO = os.environ["GITHUB_REPO"]
 
 IMAGE_PROMPT = """Minimal style, dark background, high contrast.
 Abstract conceptual image for social media post about branding and marketing.
 No text, no people, no faces. Pure minimalism.
 Black, white, and one accent color (gold or deep blue).
 Premium, editorial, thoughtful aesthetic."""
-
-IMGUR_CLIENT_ID = "546c25a59c58ad7"
 
 
 def get_sheet():
@@ -47,15 +47,25 @@ def generate_image(text, client):
     return response.data[0].url
 
 
-def upload_image(image_url):
+def upload_to_github(image_url, filename):
     img_data = requests.get(image_url, timeout=30).content
-    response = requests.post(
-        "https://api.imgur.com/3/image",
-        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
-        data={"image": img_data, "type": "file"},
-        timeout=30,
-    )
-    return response.json()["data"]["link"]
+    encoded = base64.b64encode(img_data).decode("utf-8")
+
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/images/{filename}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {
+        "message": f"Add image {filename}",
+        "content": encoded,
+    }
+
+    response = requests.put(api_url, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+
+    raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/images/{filename}"
+    return raw_url
 
 
 def run():
@@ -81,9 +91,10 @@ def run():
             print(f"Строка {i}: генерирую картинку...")
             try:
                 dalle_url = generate_image(text, openai_client)
-                final_url = upload_image(dalle_url)
+                filename = f"post_{row[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+                final_url = upload_to_github(dalle_url, filename)
                 sheet.update_cell(i, 3, final_url)
-                print(f"  ✓ Картинка добавлена: {final_url}")
+                print(f"  ✓ Картинка: {final_url}")
                 updated += 1
                 time.sleep(3)
             except Exception as e:
