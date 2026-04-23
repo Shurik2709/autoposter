@@ -1,48 +1,29 @@
 import os
 import json
 import time
-from datetime import datetime, timedelta
-import pytz
+import requests
+import tempfile
 from openai import OpenAI
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from datetime import datetime
 
-MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 SHEET_NAME = "Posts"
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
 
-POST_DAYS = [0, 2, 4]
-POST_TIME = "10:00"
+IMAGE_PROMPT = """Minimal style, dark background, high contrast.
+Abstract conceptual image for social media post about branding and marketing.
+No text, no people, no faces. Pure minimalism.
+Black, white, and one accent color (gold or deep blue).
+Premium, editorial, thoughtful aesthetic."""
 
-TOV_PROMPT = """Ты — Шанкар Шиллер, основатель студии брендинга Shankara Brand. 12+ лет в маркетинге.
-
-СТИЛЬ:
-- На "ты". Экспертно, без заискивания
-- Короткие абзацы, никакой воды
-- Минимум прилагательных — только факты и инсайты
-- Капс только для ключевых смысловых узлов
-- ЗАПРЕЩЕНО: "уникальный", "лучший", пустые приветствия
-
-СТРУКТУРА КАЖДОГО ПОСТА:
-1. Провокационный заголовок — вопрос или контраст
-2. Погружающая мини-история "представь: ты..." (2-4 предложения, читатель внутри ситуации)
-3. Объяснение механизма — почему это происходит. Нейронаука и психология простым языком. Человек должен сказать "вот почему это так работает"
-4. Раскрытие через метафору или пример из практики
-5. Практические тезисы (▫️) — что конкретно делать сегодня, не абстракции
-6. Провокационный тест или вопрос читателю
-7. CTA — конкретный
-8. Подпись: "Студия брендинга Шанкара. Где смыслы важнее шрифтов."
-
-ГЛАВНЫЙ ПРИНЦИП: максимальная полезность. Человек читает и сразу знает что делать иначе."""
-
-TOPICS = [
-    "Почему клиенты выбирают дешевле — и как это изменить",
-    "3 признака что твой бренд — это просто логотип",
-    "Что такое Job To Be Done и почему это меняет всё в маркетинге",
-]
 
 def get_sheet():
-    creds_data = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_data = json.loads(GOOGLE_CREDENTIALS)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -51,53 +32,88 @@ def get_sheet():
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
 
-def generate_post(topic, client):
-    response = client.chat.completions.create(
+
+def get_drive_service():
+    creds_data = json.loads(GOOGLE_CREDENTIALS)
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
+    return build("drive", "v3", credentials=creds)
+
+
+def generate_image(text, client):
+    desc = client.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": TOV_PROMPT},
-            {"role": "user", "content": f"Напиши пост на тему: {topic}"}
-        ],
-        temperature=0.85,
-        max_tokens=1000,
+        messages=[{"role": "user", "content": f"One sentence in English: what abstract minimalist visual fits a post about: '{text[:200]}'? Only objects/shapes, no text, no people."}],
+        max_tokens=100,
+    ).choices[0].message.content.strip()
+
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=f"{IMAGE_PROMPT} Theme: {desc}",
+        size="1024x1024",
+        quality="standard",
+        n=1,
     )
-    return response.choices[0].message.content.strip()
+    return response.data[0].url
 
-def get_next_dates(count=3):
-    now = datetime.now(MOSCOW_TZ)
-    dates = []
-    current = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    while len(dates) < count:
-        current += timedelta(days=1)
-        if current.weekday() in POST_DAYS:
-            h, m = POST_TIME.split(":")
-            dates.append(current.replace(hour=int(h), minute=int(m)))
-    return dates
 
-def get_next_id(sheet):
-    rows = sheet.get_all_values()
-    if len(rows) <= 1:
-        return 1
-    ids = [int(r[0]) for r in rows[1:] if r and r[0].strip().isdigit()]
-    return max(ids) + 1 if ids else 1
+def upload_to_drive(image_url, filename, drive_service):
+    img_data = requests.get(image_url, timeout=30).content
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        f.write(img_data)
+        tmp_path = f.name
+
+    file_metadata = {"name": filename}
+    media = MediaFileUpload(tmp_path, mimetype="image/png")
+    uploaded = drive_service.files().create(
+        body=file_metadata, media_body=media, fields="id"
+    ).execute()
+
+    file_id = uploaded.get("id")
+    drive_service.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    os.unlink(tmp_path)
+    return f"https://drive.google.com/uc?id={file_id}"
+
 
 def run():
-    print("Запуск генерации контент-плана...")
-    openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    print("Проверяю таблицу...")
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
     sheet = get_sheet()
-    dates = get_next_dates(len(TOPICS))
-    next_id = get_next_id(sheet)
+    drive_service = get_drive_service()
 
-    for i, topic in enumerate(TOPICS):
-        print(f"[{i+1}/{len(TOPICS)}] {topic}")
-        text = generate_post(topic, openai_client)
-        publish_time = dates[i].strftime("%Y-%m-%d %H:%M")
-        row = [str(next_id + i), text, "", publish_time, "TRUE", "TRUE", "FALSE", "pending", ""]
-        sheet.append_row(row)
-        print(f"  ✓ Добавлен. Публикация: {publish_time}")
-        time.sleep(1)
+    rows = sheet.get_all_values()
+    if len(rows) <= 1:
+        print("Нет постов.")
+        return
 
-    print(f"\nГотово. Добавлено постов: {len(TOPICS)}")
+    updated = 0
+    for i, row in enumerate(rows[1:], start=2):
+        if len(row) < 9:
+            row += [""] * (9 - len(row))
+
+        status = row[7].strip()
+        image_url = row[2].strip()
+        text = row[1].strip()
+
+        if status == "pending" and not image_url and text:
+            print(f"Строка {i}: генерирую картинку...")
+            try:
+                url = generate_image(text, openai_client)
+                filename = f"post_{row[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+                drive_url = upload_to_drive(url, filename, drive_service)
+                sheet.update_cell(i, 3, drive_url)
+                print(f"  ✓ Картинка добавлена: {drive_url}")
+                updated += 1
+                time.sleep(3)
+            except Exception as e:
+                print(f"  ✗ Ошибка: {e}")
+
+    print(f"\nГотово. Обновлено строк: {updated}")
+
 
 if __name__ == "__main__":
     run()
