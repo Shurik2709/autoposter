@@ -15,11 +15,11 @@ GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]
 
-IMAGE_PROMPT = """Minimal style, dark background, high contrast.
-Abstract conceptual image for social media post about branding and marketing.
-No text, no people, no faces. Pure minimalism.
-Black, white, and one accent color (gold or deep blue).
-Premium, editorial, thoughtful aesthetic."""
+IMAGE_PROMPT = """Photorealistic, cinematic style. Professional photography aesthetic.
+Dark moody atmosphere, dramatic lighting. High quality, editorial look.
+No text, no people, no faces.
+Objects, spaces, or concepts related to business, branding, and marketing.
+Shot on professional camera, shallow depth of field, premium feel."""
 
 
 def get_sheet():
@@ -33,13 +33,13 @@ def get_sheet():
 def generate_image(text, client):
     desc = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": f"One sentence in English: what abstract minimalist visual fits a post about: '{text[:200]}'? Only objects/shapes, no text, no people."}],
+        messages=[{"role": "user", "content": f"One sentence in English: what realistic photographic visual fits a post about: '{text[:200]}'? Describe a scene with objects or environment, no people, no text."}],
         max_tokens=100,
     ).choices[0].message.content.strip()
 
     response = client.images.generate(
         model="dall-e-3",
-        prompt=f"{IMAGE_PROMPT} Theme: {desc}",
+        prompt=f"{IMAGE_PROMPT} Scene: {desc}",
         size="1024x1024",
         quality="standard",
         n=1,
