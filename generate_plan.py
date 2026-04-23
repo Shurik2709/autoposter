@@ -38,17 +38,19 @@ def generate_image(text, client):
     ).choices[0].message.content.strip()
 
     response = client.images.generate(
-        model="dall-e-3",
+        model="gpt-image-1",
         prompt=f"{IMAGE_PROMPT} Scene: {desc}",
         size="1024x1024",
         quality="standard",
         n=1,
     )
-    return response.data[0].url
+
+    image_base64 = response.data[0].b64_json
+    img_data = base64.b64decode(image_base64)
+    return img_data
 
 
-def upload_to_github(image_url, filename):
-    img_data = requests.get(image_url, timeout=30).content
+def upload_to_github(img_data, filename):
     encoded = base64.b64encode(img_data).decode("utf-8")
 
     api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/images/{filename}"
@@ -64,8 +66,7 @@ def upload_to_github(image_url, filename):
     response = requests.put(api_url, headers=headers, json=payload, timeout=30)
     response.raise_for_status()
 
-    raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/images/{filename}"
-    return raw_url
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/images/{filename}"
 
 
 def run():
@@ -90,9 +91,9 @@ def run():
         if status == "pending" and not image_url and text:
             print(f"Строка {i}: генерирую картинку...")
             try:
-                dalle_url = generate_image(text, openai_client)
+                img_data = generate_image(text, openai_client)
                 filename = f"post_{row[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
-                final_url = upload_to_github(dalle_url, filename)
+                final_url = upload_to_github(img_data, filename)
                 sheet.update_cell(i, 3, final_url)
                 print(f"  ✓ Картинка: {final_url}")
                 updated += 1
