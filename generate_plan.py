@@ -41,7 +41,7 @@ def generate_image(text, client):
         model="gpt-image-1",
         prompt=f"{IMAGE_PROMPT} Scene: {desc}",
         size="1024x1024",
-        quality="standard",
+        quality="high",
         n=1,
     )
 
