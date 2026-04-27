@@ -15,11 +15,10 @@ GOOGLE_CREDENTIALS = os.environ["GOOGLE_CREDENTIALS"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]
 
-IMAGE_PROMPT = """Photorealistic, cinematic style. Professional photography aesthetic.
-Dark moody atmosphere, dramatic lighting. High quality, editorial look.
-No text, no people, no faces.
-Objects, spaces, or concepts related to business, branding, and marketing.
-Shot on professional camera, shallow depth of field, premium feel."""
+IMAGE_STYLE = """Style: photorealistic, cinematic, professional photography.
+Dark moody atmosphere, dramatic lighting, shallow depth of field, premium editorial look.
+NO text, NO people, NO faces, NO logos.
+Objects, spaces, textures, or environments only."""
 
 
 def get_sheet():
@@ -30,24 +29,46 @@ def get_sheet():
     return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
 
 
-def generate_image(text, client):
-    desc = client.chat.completions.create(
+def generate_image_prompt(text, client):
+    """Читает весь текст поста и создаёт точный визуальный промпт."""
+    response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": f"One sentence in English: what realistic photographic visual fits a post about: '{text[:200]}'? Describe a scene with objects or environment, no people, no text."}],
-        max_tokens=100,
-    ).choices[0].message.content.strip()
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a creative director for a premium branding studio. "
+                    "Your task: read the full post text and create a precise visual prompt for a photorealistic image. "
+                    "The image must metaphorically reflect the CORE IDEA of the post — not illustrate it literally. "
+                    "Think in symbols, textures, environments, objects. "
+                    "Output ONLY the image prompt in English, 2-3 sentences max. "
+                    "No people, no text, no faces in the image."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Post text:\n\n{text}\n\nCreate a photorealistic image prompt that captures the essence of this post."
+            }
+        ],
+        max_tokens=150,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def generate_image(text, client):
+    image_prompt = generate_image_prompt(text, client)
+    print(f"  Промпт для картинки: {image_prompt}")
 
     response = client.images.generate(
         model="gpt-image-1",
-        prompt=f"{IMAGE_PROMPT} Scene: {desc}",
+        prompt=f"{IMAGE_STYLE}\n\nScene: {image_prompt}",
         size="1024x1024",
         quality="high",
         n=1,
     )
 
     image_base64 = response.data[0].b64_json
-    img_data = base64.b64decode(image_base64)
-    return img_data
+    return base64.b64decode(image_base64)
 
 
 def upload_to_github(img_data, filename):
